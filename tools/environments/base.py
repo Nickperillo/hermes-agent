@@ -10,6 +10,8 @@ import json
 import logging
 import os
 import shlex
+import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -22,6 +24,25 @@ from hermes_constants import get_hermes_home
 from tools.interrupt import is_interrupted
 
 logger = logging.getLogger(__name__)
+
+
+def _find_timeout_cmd() -> str | None:
+    """Find a shell timeout command available on this system.
+
+    Checks in order: gtimeout (macOS via brew coreutils), timeout (Linux).
+    Returns None if neither is found — caller should use the Perl fallback.
+    """
+    for cmd in ("gtimeout", "timeout"):
+        if shutil.which(cmd):
+            return cmd
+    return None
+
+
+# Detected once at import time so every execute() call is free.
+_TIMEOUT_CMD: str | None = _find_timeout_cmd()
+
+
+
 
 
 def get_sandbox_dir() -> Path:
@@ -331,8 +352,21 @@ class BaseEnvironment(ABC):
         )
         parts.append(f"cd {quoted_cwd} || exit 126")
 
-        # Run the actual command
-        parts.append(f"eval '{escaped}'")
+        # Wrap the command in a shell-level timeout so daemons that call setsid()
+        # (e.g. tailscale funnel, cloudflared) are still killed even if they
+        # escape the Python process group.
+        if self.timeout:
+            if _TIMEOUT_CMD:
+                # gtimeout/timeout: prepend directly, eval runs as the timed command
+                parts.append(f"{_TIMEOUT_CMD} {self.timeout} eval '{escaped}'")
+            else:
+                # Perl alarm fallback: wrap the entire eval in a sh -c string
+                # so perl exec's a single shell command, not bare 'eval' + args.
+                inner = f"eval '{escaped}'"
+                inner_escaped = inner.replace("'", "'\\''")
+                parts.append(f"perl -e 'alarm {self.timeout}; exec @ARGV' sh -c '{inner_escaped}'")
+        else:
+            parts.append(f"eval '{escaped}'")
         parts.append("__hermes_ec=$?")
 
         # Re-dump env vars to snapshot (last-writer-wins for concurrent calls)
@@ -392,6 +426,10 @@ class BaseEnvironment(ABC):
         while proc.poll() is None:
             if is_interrupted():
                 self._kill_process(proc)
+                try:
+                    proc.stdout.close()
+                except Exception:
+                    pass
                 drain_thread.join(timeout=2)
                 return {
                     "output": "".join(output_chunks) + "\n[Command interrupted]",
@@ -399,6 +437,13 @@ class BaseEnvironment(ABC):
                 }
             if time.monotonic() > deadline:
                 self._kill_process(proc)
+                # Close pipe from our side so drain_thread gets EOF even if a
+                # daemonized child (e.g. tailscale funnel) still holds the
+                # write-end open after the bash process dies.
+                try:
+                    proc.stdout.close()
+                except Exception:
+                    pass
                 drain_thread.join(timeout=2)
                 partial = "".join(output_chunks)
                 timeout_msg = f"\n[Command timed out after {timeout}s]"
@@ -407,6 +452,7 @@ class BaseEnvironment(ABC):
                     if partial
                     else timeout_msg.lstrip(),
                     "returncode": 124,
+                    "warning": "process timed out; orphaned children may remain (check manually)",
                 }
             time.sleep(0.2)
 
@@ -417,7 +463,28 @@ class BaseEnvironment(ABC):
         except Exception:
             pass
 
-        return {"output": "".join(output_chunks), "returncode": proc.returncode}
+        # Python-side backstop: if the process somehow survived the shell timeout
+        # and the Python deadline loop (e.g. escaped via setsid), kill it now.
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "Python backstop: process still alive %ds after timeout — force-killing",
+                timeout,
+            )
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
+
+        return {"output": "".join(output_chunks), "returncode": proc.returncode or 124}
 
     def _kill_process(self, proc: ProcessHandle):
         """Terminate a process. Subclasses may override for process-group kill."""

@@ -276,10 +276,12 @@ def build_session_context_prompt(
         lines.append("")
         lines.append(
             "**Platform notes:** You are running inside Discord. "
-            "You do NOT have access to Discord-specific APIs — you cannot search "
-            "channel history, pin messages, manage roles, or list server members. "
-            "Do not promise to perform these actions. If the user asks, explain "
-            "that you can only read messages sent directly to you and respond."
+            "You do NOT have passive access to Discord — you cannot read channel history, "
+            "list server members, or receive messages from channels you weren't mentioned in. "
+            "However, you CAN actively manage the server via the Discord REST API using the bot token "
+            "in ~/.hermes/.env: pin/unpin messages, create/rename/reorder channels and categories, "
+            "set channel topics, and send to any channel by ID. "
+            "Load the 'discord-server-bootstrap' skill for the full API workflow."
         )
 
     # Connected platforms
@@ -807,9 +809,7 @@ class SessionStore:
         to avoid resetting long-idle sessions that are harmless to resume.
         Returns the number of sessions that were suspended.
         """
-        import time as _time
-
-        cutoff = _time.time() - max_age_seconds
+        cutoff = datetime.now() - timedelta(seconds=max_age_seconds)
         count = 0
         with self._lock:
             self._ensure_loaded_locked()
