@@ -104,6 +104,9 @@ DANGEROUS_PATTERNS = [
     # Gateway protection: never start gateway outside systemd management
     (r'gateway\s+run\b.*(&\s*$|&\s*;|\bdisown\b|\bsetsid\b)', "start gateway outside systemd (use 'systemctl --user restart hermes-gateway')"),
     (r'\bnohup\b.*gateway\s+run\b', "start gateway outside systemd (use 'systemctl --user restart hermes-gateway')"),
+    # Prevent agent from restarting/stopping the gateway mid-session (kills in-flight responses)
+    (r'\blaunchctl\s+(stop|bootout|disable)\b.*hermes', "stop/restart hermes gateway via launchctl (kills in-flight responses)"),
+    (r'\blaunchctl\s+.*\bhermes\b.*&&.*launchctl\b', "restart hermes gateway via launchctl chain (kills in-flight responses)"),
     # Self-termination protection: prevent agent from killing its own process
     (r'\b(pkill|killall)\b.*\b(hermes|gateway|cli\.py)\b', "kill hermes/gateway process (self-termination)"),
     # Self-termination via kill + command substitution (pgrep/pidof).
@@ -130,6 +133,10 @@ DANGEROUS_PATTERNS = [
     # a script is first made executable then immediately run. The script
     # content may contain dangerous commands that individual patterns miss.
     (r'\bchmod\s+\+x\b.*[;&|]+\s*\./', "chmod +x followed by immediate execution"),
+    # Commands that run indefinitely in foreground and hang the agent — must use background=True
+    (r'\btailscale\s+funnel\b', "tailscale funnel runs forever — use background=True"),
+    (r'\bcloudflared\s+tunnel\b', "cloudflared tunnel runs forever — use background=True"),
+    (r'\bngrok\b(?!.*&)', "ngrok runs forever in foreground — use background=True"),
 ]
 
 

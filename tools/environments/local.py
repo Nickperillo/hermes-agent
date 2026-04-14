@@ -1,11 +1,15 @@
 """Local execution environment — spawn-per-call with session snapshot."""
 
+import logging
 import os
 import platform
 import shutil
 import signal
 import subprocess
 import tempfile
+import time
+
+logger = logging.getLogger(__name__)
 
 from tools.environments.base import BaseEnvironment, _pipe_stdin
 
@@ -267,8 +271,17 @@ class LocalEnvironment(BaseEnvironment):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
-            preexec_fn=None if _IS_WINDOWS else os.setsid,
+            start_new_session=True,
         )
+
+        # Record session ID at spawn time while proc.pid is guaranteed alive.
+        # Stored so _kill_process can use it even after bash wrapper has exited
+        # (os.getsid() would raise ProcessLookupError on a dead pid).
+        if not _IS_WINDOWS:
+            try:
+                proc._hermes_sid = os.getsid(proc.pid)
+            except (ProcessLookupError, PermissionError):
+                proc._hermes_sid = None
 
         if stdin_data is not None:
             _pipe_stdin(proc, stdin_data)
@@ -276,22 +289,53 @@ class LocalEnvironment(BaseEnvironment):
         return proc
 
     def _kill_process(self, proc):
-        """Kill the entire process group (all children)."""
-        try:
-            if _IS_WINDOWS:
+        """Kill by session ID using pkill -s, with os.killpg as belt-and-braces.
+
+        pkill -s reaches all processes in the session regardless of process group,
+        catching children that called setpgrp() to re-group within the same session.
+        Fully-daemonized children that called setsid() will escape — accepted.
+        """
+        if _IS_WINDOWS:
+            try:
                 proc.terminate()
-            else:
+            except Exception:
+                pass
+            return
+
+        sid = getattr(proc, "_hermes_sid", None)
+
+        if sid is not None:
+            try:
+                subprocess.run(["pkill", "-TERM", "-s", str(sid)], check=False, timeout=3.0)
+            except Exception:
+                pass
+            time.sleep(0.5)
+            try:
+                subprocess.run(["pkill", "-KILL", "-s", str(sid)], check=False, timeout=3.0)
+            except Exception:
+                pass
+            # Belt-and-braces on the non-_IS_WINDOWS path: cheap os.killpg covers
+            # the edge case where pkill is not on PATH.
+            try:
+                os.killpg(sid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        else:
+            logger.warning(
+                "_kill_process: no stored sid for pid=%s, using pgid fallback", proc.pid
+            )
+            try:
                 pgid = os.getpgid(proc.pid)
                 os.killpg(pgid, signal.SIGTERM)
                 try:
-                    proc.wait(timeout=1.0)
+                    proc.wait(timeout=2.0)
                 except subprocess.TimeoutExpired:
                     os.killpg(pgid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            except (ProcessLookupError, PermissionError):
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
 
     def _update_cwd(self, result: dict):
         """Read CWD from temp file (local-only, no round-trip needed)."""
