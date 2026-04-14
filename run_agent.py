@@ -784,9 +784,8 @@ class AIAgent:
         # knows what their endpoint supports (#10473).
         if (
             api_mode is None
-            and self.api_mode == "chat_completions"
-            and self.provider != "copilot-acp"
-            and not str(self.base_url or "").lower().startswith("acp://copilot")
+            and self.provider not in {"copilot-acp", "claude-code-acp"}
+            and not str(self.base_url or "").lower().startswith("acp://")
             and not str(self.base_url or "").lower().startswith("acp+tcp://")
             and (
                 self._is_direct_openai_url()
@@ -1034,7 +1033,7 @@ class AIAgent:
                 # Explicit credentials from CLI/gateway — construct directly.
                 # The runtime provider resolver already handled auth for us.
                 client_kwargs = {"api_key": api_key, "base_url": base_url}
-                if self.provider == "copilot-acp":
+                if self.provider in {"copilot-acp", "claude-code-acp"} or str(base_url).startswith("acp://"):
                     client_kwargs["command"] = self.acp_command
                     client_kwargs["args"] = self.acp_args
                 effective_base = base_url
@@ -4657,12 +4656,12 @@ class AIAgent:
         client_kwargs = dict(client_kwargs)
         _validate_proxy_env_urls()
         _validate_base_url(client_kwargs.get("base_url"))
-        if self.provider == "copilot-acp" or str(client_kwargs.get("base_url", "")).startswith("acp://copilot"):
+        if self.provider in {"copilot-acp", "claude-code-acp"} or str(client_kwargs.get("base_url", "")).startswith("acp://"):
             from agent.copilot_acp_client import CopilotACPClient
 
             client = CopilotACPClient(**client_kwargs)
             logger.info(
-                "Copilot ACP client created (%s, shared=%s) %s",
+                "ACP subprocess client created (%s, shared=%s) %s",
                 reason,
                 shared,
                 self._client_log_context(),

@@ -147,6 +147,13 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         inference_base_url=DEFAULT_COPILOT_ACP_BASE_URL,
         base_url_env_var="COPILOT_ACP_BASE_URL",
     ),
+    "claude-code-acp": ProviderConfig(
+        id="claude-code-acp",
+        name="Claude Code ACP",
+        auth_type="external_process",
+        inference_base_url="acp://claude-code",
+        base_url_env_var="CLAUDE_CODE_ACP_BASE_URL",
+    ),
     "gemini": ProviderConfig(
         id="gemini",
         name="Google AI Studio",
@@ -310,6 +317,60 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         base_url_env_var="BEDROCK_BASE_URL",
     ),
 }
+
+_EXTERNAL_PROCESS_PROVIDER_META: Dict[str, Dict[str, Any]] = {
+    "copilot-acp": {
+        "command_env": "HERMES_COPILOT_ACP_COMMAND",
+        "fallback_command_env": "COPILOT_CLI_PATH",
+        "args_env": "HERMES_COPILOT_ACP_ARGS",
+        "default_command": "copilot",
+        "default_args": ["--acp", "--stdio"],
+        "api_key": "copilot-acp",
+        "missing_command_error": (
+            "Could not find the Copilot CLI command '{command}'. "
+            "Install GitHub Copilot CLI or set HERMES_COPILOT_ACP_COMMAND/COPILOT_CLI_PATH."
+        ),
+        "missing_command_code": "missing_copilot_cli",
+    },
+    "claude-code-acp": {
+        "command_env": "HERMES_CLAUDE_ACP_COMMAND",
+        "fallback_command_env": "CLAUDE_CODE_CLI_PATH",
+        "args_env": "HERMES_CLAUDE_ACP_ARGS",
+        "default_command": "claude",
+        "default_args": ["--acp", "--stdio"],
+        "api_key": "claude-code-acp",
+        "missing_command_error": (
+            "Could not find the Claude CLI command '{command}'. "
+            "Install Claude Code CLI or set HERMES_CLAUDE_ACP_COMMAND/CLAUDE_CODE_CLI_PATH."
+        ),
+        "missing_command_code": "missing_claude_cli",
+    },
+}
+
+
+def _external_process_provider_meta(provider_id: str) -> Dict[str, Any]:
+    return dict(_EXTERNAL_PROCESS_PROVIDER_META.get(provider_id, {}))
+
+
+def _resolve_external_process_command(provider_id: str) -> tuple[str, list[str], str]:
+    meta = _external_process_provider_meta(provider_id)
+    command_env = str(meta.get("command_env") or "").strip()
+    fallback_command_env = str(meta.get("fallback_command_env") or "").strip()
+    args_env = str(meta.get("args_env") or "").strip()
+    default_command = str(meta.get("default_command") or "").strip()
+    default_args = list(meta.get("default_args") or ["--acp", "--stdio"])
+
+    command = ""
+    if command_env:
+        command = os.getenv(command_env, "").strip()
+    if not command and fallback_command_env:
+        command = os.getenv(fallback_command_env, "").strip()
+    if not command:
+        command = default_command
+
+    raw_args = os.getenv(args_env, "").strip() if args_env else ""
+    args = shlex.split(raw_args) if raw_args else default_args
+    return command, args, args_env
 
 
 # =============================================================================
@@ -977,6 +1038,7 @@ def resolve_provider(
         "github": "copilot", "github-copilot": "copilot",
         "github-models": "copilot", "github-model": "copilot",
         "github-copilot-acp": "copilot-acp", "copilot-acp-agent": "copilot-acp",
+        "claude-code-acp": "claude-code-acp", "claude-max": "claude-code-acp",
         "aigateway": "ai-gateway", "vercel": "ai-gateway", "vercel-ai-gateway": "ai-gateway",
         "opencode": "opencode-zen", "zen": "opencode-zen",
         "qwen-portal": "qwen-oauth", "qwen-cli": "qwen-oauth", "qwen-oauth": "qwen-oauth", "google-gemini-cli": "google-gemini-cli", "gemini-cli": "google-gemini-cli", "gemini-oauth": "google-gemini-cli",
@@ -2547,13 +2609,7 @@ def get_external_process_provider_status(provider_id: str) -> Dict[str, Any]:
     if not pconfig or pconfig.auth_type != "external_process":
         return {"configured": False}
 
-    command = (
-        os.getenv("HERMES_COPILOT_ACP_COMMAND", "").strip()
-        or os.getenv("COPILOT_CLI_PATH", "").strip()
-        or "copilot"
-    )
-    raw_args = os.getenv("HERMES_COPILOT_ACP_ARGS", "").strip()
-    args = shlex.split(raw_args) if raw_args else ["--acp", "--stdio"]
+    command, args, _ = _resolve_external_process_command(provider_id)
     base_url = os.getenv(pconfig.base_url_env_var, "").strip() if pconfig.base_url_env_var else ""
     if not base_url:
         base_url = pconfig.inference_base_url
@@ -2582,7 +2638,8 @@ def get_auth_status(provider_id: Optional[str] = None) -> Dict[str, Any]:
         return get_qwen_auth_status()
     if target == "google-gemini-cli":
         return get_gemini_oauth_auth_status()
-    if target == "copilot-acp":
+    pconfig = PROVIDER_REGISTRY.get(target)
+    if pconfig and pconfig.auth_type == "external_process":
         return get_external_process_provider_status(target)
     # API-key providers
     pconfig = PROVIDER_REGISTRY.get(target)
@@ -2650,25 +2707,19 @@ def resolve_external_process_provider_credentials(provider_id: str) -> Dict[str,
     if not base_url:
         base_url = pconfig.inference_base_url
 
-    command = (
-        os.getenv("HERMES_COPILOT_ACP_COMMAND", "").strip()
-        or os.getenv("COPILOT_CLI_PATH", "").strip()
-        or "copilot"
-    )
-    raw_args = os.getenv("HERMES_COPILOT_ACP_ARGS", "").strip()
-    args = shlex.split(raw_args) if raw_args else ["--acp", "--stdio"]
+    command, args, _ = _resolve_external_process_command(provider_id)
     resolved_command = shutil.which(command) if command else None
+    meta = _external_process_provider_meta(provider_id)
     if not resolved_command and not base_url.startswith("acp+tcp://"):
         raise AuthError(
-            f"Could not find the Copilot CLI command '{command}'. "
-            "Install GitHub Copilot CLI or set HERMES_COPILOT_ACP_COMMAND/COPILOT_CLI_PATH.",
+            str(meta.get("missing_command_error") or "Could not find external process command '{command}'.").format(command=command),
             provider=provider_id,
-            code="missing_copilot_cli",
+            code=str(meta.get("missing_command_code") or "missing_external_process_cli"),
         )
 
     return {
         "provider": provider_id,
-        "api_key": "copilot-acp",
+        "api_key": str(meta.get("api_key") or provider_id),
         "base_url": base_url.rstrip("/"),
         "command": resolved_command or command,
         "args": args,
