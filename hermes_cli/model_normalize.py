@@ -76,6 +76,7 @@ _STRIP_VENDOR_ONLY_PROVIDERS: frozenset[str] = frozenset({
     "copilot",
     "copilot-acp",
     "claude-code-acp",
+    "claude-cli",
     "openai-codex",
 })
 

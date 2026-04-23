@@ -300,6 +300,46 @@ class TestProviderPersistsAfterModelSave:
         assert model.get("api_mode") == "anthropic_messages"
 
 
+
+    def test_claude_cli_persists_provider_and_base_url(self, config_home):
+        from hermes_cli.main import _model_flow_claude_cli
+        from hermes_cli.config import load_config
+
+        with patch(
+            "hermes_cli.auth.get_external_process_provider_status",
+            return_value={
+                "resolved_command": "/usr/local/bin/claude",
+                "command": "claude",
+                "base_url": "claude-cli://local",
+            },
+        ), patch(
+            "hermes_cli.auth.resolve_external_process_provider_credentials",
+            return_value={
+                "provider": "claude-cli",
+                "api_key": "claude-cli",
+                "base_url": "claude-cli://local",
+                "command": "/usr/local/bin/claude",
+                "args": ["-p", "--output-format", "stream-json"],
+                "source": "process",
+            },
+        ), patch(
+            "hermes_cli.auth._prompt_model_selection",
+            return_value="claude-opus-4-7",
+        ), patch(
+            "hermes_cli.auth.deactivate_provider",
+        ):
+            _model_flow_claude_cli(load_config(), "old-model")
+
+        import yaml
+
+        config = yaml.safe_load((config_home / "config.yaml").read_text()) or {}
+        model = config.get("model")
+        assert isinstance(model, dict)
+        assert model.get("provider") == "claude-cli"
+        assert model.get("base_url") == "claude-cli://local"
+        assert model.get("default") == "claude-opus-4-7"
+        assert model.get("api_mode") == "chat_completions"
+
 class TestBaseUrlValidation:
     """Reject non-URL values in the base URL prompt (e.g. shell commands)."""
 

@@ -71,6 +71,7 @@ DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 DEFAULT_QWEN_BASE_URL = "https://portal.qwen.ai/v1"
 DEFAULT_GITHUB_MODELS_BASE_URL = "https://api.githubcopilot.com"
 DEFAULT_COPILOT_ACP_BASE_URL = "acp://copilot"
+DEFAULT_CLAUDE_CLI_BASE_URL = "claude-cli://local"
 DEFAULT_OLLAMA_CLOUD_BASE_URL = "https://ollama.com/v1"
 STEPFUN_STEP_PLAN_INTL_BASE_URL = "https://api.stepfun.ai/step_plan/v1"
 STEPFUN_STEP_PLAN_CN_BASE_URL = "https://api.stepfun.com/step_plan/v1"
@@ -156,6 +157,13 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         auth_type="external_process",
         inference_base_url="acp://claude-code",
         base_url_env_var="CLAUDE_CODE_ACP_BASE_URL",
+    ),
+    "claude-cli": ProviderConfig(
+        id="claude-cli",
+        name="Claude CLI",
+        auth_type="external_process",
+        inference_base_url=DEFAULT_CLAUDE_CLI_BASE_URL,
+        base_url_env_var="CLAUDE_CLI_BASE_URL",
     ),
     "gemini": ProviderConfig(
         id="gemini",
@@ -357,6 +365,29 @@ _EXTERNAL_PROCESS_PROVIDER_META: Dict[str, Dict[str, Any]] = {
         "missing_command_error": (
             "Could not find the Claude CLI command '{command}'. "
             "Install Claude Code CLI or set HERMES_CLAUDE_ACP_COMMAND/CLAUDE_CODE_CLI_PATH."
+        ),
+        "missing_command_code": "missing_claude_cli",
+    },
+    "claude-cli": {
+        "command_env": "HERMES_CLAUDE_CLI_COMMAND",
+        "fallback_command_env": "CLAUDE_CODE_CLI_PATH",
+        "args_env": "HERMES_CLAUDE_CLI_ARGS",
+        "default_command": "claude",
+        "default_args": [
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--include-partial-messages",
+            "--verbose",
+            "--setting-sources",
+            "user",
+            "--permission-mode",
+            "bypassPermissions",
+        ],
+        "api_key": "claude-cli",
+        "missing_command_error": (
+            "Could not find the Claude CLI command '{command}'. "
+            "Install Claude Code CLI or set HERMES_CLAUDE_CLI_COMMAND/CLAUDE_CODE_CLI_PATH."
         ),
         "missing_command_code": "missing_claude_cli",
     },
