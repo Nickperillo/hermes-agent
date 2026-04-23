@@ -4981,6 +4981,11 @@ class AIAgent:
         if isinstance(primary_client, Mock):
             return primary_client
         if self.provider == "claude-cli" or str(getattr(primary_client, "base_url", "")).startswith("claude-cli://"):
+            # Re-sync the tool event callback each request — the gateway sets
+            # tool_progress_callback *after* the client is created during init,
+            # so the client's on_tool_event may be stale or None.
+            if hasattr(primary_client, "on_tool_event"):
+                primary_client.on_tool_event = self.tool_progress_callback
             return primary_client
         with self._openai_client_lock():
             request_kwargs = dict(self._client_kwargs)
