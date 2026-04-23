@@ -120,6 +120,8 @@ class TestProviderRegistry:
     def test_base_urls(self):
         assert PROVIDER_REGISTRY["copilot"].inference_base_url == "https://api.githubcopilot.com"
         assert PROVIDER_REGISTRY["copilot-acp"].inference_base_url == "acp://copilot"
+        assert PROVIDER_REGISTRY["claude-code-acp"].inference_base_url == "acp://claude-code"
+        assert PROVIDER_REGISTRY["claude-cli"].inference_base_url == "claude-cli://local"
         assert PROVIDER_REGISTRY["zai"].inference_base_url == "https://api.z.ai/api/paas/v4"
         assert PROVIDER_REGISTRY["kimi-coding"].inference_base_url == "https://api.moonshot.ai/v1"
         assert PROVIDER_REGISTRY["stepfun"].inference_base_url == STEPFUN_STEP_PLAN_INTL_BASE_URL
@@ -1073,3 +1075,20 @@ class TestHuggingFaceModels:
         from hermes_cli.models import _PROVIDER_LABELS
         assert "huggingface" in _PROVIDER_LABELS
         assert _PROVIDER_LABELS["huggingface"] == "Hugging Face"
+
+class TestClaudeCliExternalProcess:
+    def test_claude_cli_status_detects_command(self, monkeypatch):
+        monkeypatch.setenv("HERMES_CLAUDE_CLI_COMMAND", "claude")
+        status = get_external_process_provider_status("claude-cli")
+        assert status["command"] == "claude"
+        assert status["base_url"] == "claude-cli://local"
+
+    def test_claude_cli_credentials_resolve(self, monkeypatch):
+        monkeypatch.setenv("HERMES_CLAUDE_CLI_COMMAND", "claude")
+        monkeypatch.setenv("HERMES_CLAUDE_CLI_ARGS", '-p --output-format stream-json --setting-sources user --permission-mode bypassPermissions')
+        creds = resolve_external_process_provider_credentials("claude-cli")
+        assert creds["provider"] == "claude-cli"
+        assert creds["base_url"] == "claude-cli://local"
+        assert creds["command"].endswith("claude")
+        assert creds["args"][0] == "-p"
+
