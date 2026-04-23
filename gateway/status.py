@@ -259,6 +259,10 @@ def _cleanup_invalid_pid_path(pid_path: Path, *, cleanup_stale: bool) -> None:
     if not cleanup_stale:
         return
     try:
+        # Callers only invoke this after proving the PID record is invalid or stale.
+        # Unlink directly here rather than delegating to remove_pid_file(), whose
+        # ownership guard is for live handoff safety and would otherwise preserve
+        # stale files that belong to some old/dead PID.
         pid_path.unlink(missing_ok=True)
     except Exception:
         pass
