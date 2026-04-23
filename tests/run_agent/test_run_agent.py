@@ -3562,6 +3562,37 @@ class TestFallbackAnthropicProvider:
         assert agent.client is mock_client
 
 
+
+
+def test_aiagent_uses_claude_cli_client():
+    with (
+        patch("run_agent.get_tool_definitions", return_value=_make_tool_defs("web_search")),
+        patch("run_agent.check_toolset_requirements", return_value={}),
+        patch("run_agent.OpenAI") as mock_openai,
+        patch("agent.claude_cli_client.ClaudeCliClient") as mock_claude_client,
+    ):
+        cli_client = MagicMock()
+        mock_claude_client.return_value = cli_client
+
+        agent = AIAgent(
+            api_key="claude-cli",
+            base_url="claude-cli://local",
+            provider="claude-cli",
+            acp_command="/usr/local/bin/claude",
+            acp_args=["-p", "--output-format", "stream-json"],
+            quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=True,
+        )
+
+    assert agent.client is cli_client
+    mock_openai.assert_not_called()
+    mock_claude_client.assert_called_once()
+    assert mock_claude_client.call_args.kwargs["base_url"] == "claude-cli://local"
+    assert mock_claude_client.call_args.kwargs["api_key"] == "claude-cli"
+    assert mock_claude_client.call_args.kwargs["command"] == "/usr/local/bin/claude"
+    assert mock_claude_client.call_args.kwargs["args"] == ["-p", "--output-format", "stream-json"]
+
 def test_aiagent_uses_copilot_acp_client():
     with (
         patch("run_agent.get_tool_definitions", return_value=_make_tool_defs("web_search")),
@@ -3620,6 +3651,20 @@ def test_aiagent_uses_claude_code_acp_client():
     assert mock_acp_client.call_args.kwargs["api_key"] == "claude-code-acp"
     assert mock_acp_client.call_args.kwargs["command"] == "/usr/local/bin/claude"
     assert mock_acp_client.call_args.kwargs["args"] == ["--acp", "--stdio"]
+
+
+def test_acp_client_ignores_non_numeric_timeout_objects():
+    from agent.copilot_acp_client import CopilotACPClient
+
+    client = CopilotACPClient(command="/bin/true", args=[])
+    with patch.object(client, "_run_prompt", return_value=("ok", "")) as mock_run_prompt:
+        client._create_chat_completion(
+            model="claude-opus-4-6",
+            messages=[{"role": "user", "content": "hi"}],
+            timeout=object(),
+        )
+
+    assert mock_run_prompt.call_args.kwargs["timeout_seconds"] == 900.0
 
 
 def test_quiet_spinner_allowed_with_explicit_print_fn(agent):

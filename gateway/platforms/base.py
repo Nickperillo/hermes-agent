@@ -467,6 +467,19 @@ def get_audio_cache_dir() -> Path:
     return AUDIO_CACHE_DIR
 
 
+# ---------------------------------------------------------------------------
+# Video cache — stores downloaded video files from messaging platforms
+# ---------------------------------------------------------------------------
+
+VIDEO_CACHE_DIR = get_hermes_dir("cache/video", "video_cache")
+
+
+def get_video_cache_dir() -> Path:
+    """Return the video cache directory, creating it if it doesn't exist."""
+    VIDEO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return VIDEO_CACHE_DIR
+
+
 def cache_audio_from_bytes(data: bytes, ext: str = ".ogg") -> str:
     """
     Save raw audio bytes to the cache and return the absolute file path.
@@ -575,6 +588,88 @@ def cache_video_from_bytes(data: bytes, ext: str = ".mp4") -> str:
     filepath = cache_dir / filename
     filepath.write_bytes(data)
     return str(filepath)
+
+
+def cache_video_from_bytes(data: bytes, ext: str = ".mp4") -> str:
+    """
+    Save raw video bytes to the cache and return the absolute file path.
+
+    Args:
+        data: Raw video bytes.
+        ext:  File extension including the dot (e.g. ".mp4", ".webm", ".mov").
+
+    Returns:
+        Absolute path to the cached video file as a string.
+    """
+    cache_dir = get_video_cache_dir()
+    filename = f"video_{uuid.uuid4().hex[:12]}{ext}"
+    filepath = cache_dir / filename
+    filepath.write_bytes(data)
+    return str(filepath)
+
+
+async def cache_video_from_url(url: str, ext: str = ".mp4", retries: int = 2) -> str:
+    """
+    Download a video file from a URL and save it to the local cache.
+
+    Retries on transient failures (timeouts, 429, 5xx) with exponential
+    backoff so a single slow CDN response doesn't lose the media.
+
+    Args:
+        url: The HTTP/HTTPS URL to download from.
+        ext: File extension including the dot (e.g. ".mp4", ".webm").
+        retries: Number of retry attempts on transient failures.
+
+    Returns:
+        Absolute path to the cached video file as a string.
+
+    Raises:
+        ValueError: If the URL targets a private/internal network (SSRF protection).
+    """
+    from tools.url_safety import is_safe_url
+    if not is_safe_url(url):
+        raise ValueError(f"Blocked unsafe URL (SSRF protection): {safe_url_for_log(url)}")
+
+    import asyncio
+    import httpx
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+
+    last_exc = None
+    async with httpx.AsyncClient(
+        timeout=60.0,  # Videos can be large
+        follow_redirects=True,
+        event_hooks={"response": [_ssrf_redirect_guard]},
+    ) as client:
+        for attempt in range(retries + 1):
+            try:
+                response = await client.get(
+                    url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (compatible; HermesAgent/1.0)",
+                        "Accept": "video/*,*/*;q=0.8",
+                    },
+                )
+                response.raise_for_status()
+                return cache_video_from_bytes(response.content, ext)
+            except (httpx.TimeoutException, httpx.HTTPStatusError) as exc:
+                last_exc = exc
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code < 429:
+                    raise
+                if attempt < retries:
+                    wait = 2.0 * (attempt + 1)  # Slightly longer for large files
+                    _log.debug(
+                        "Video cache retry %d/%d for %s (%.1fs): %s",
+                        attempt + 1,
+                        retries,
+                        safe_url_for_log(url),
+                        wait,
+                        exc,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                raise
+    raise last_exc
 
 
 # ---------------------------------------------------------------------------
