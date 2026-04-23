@@ -142,6 +142,19 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     "copilot-acp": [
         "copilot-acp",
     ],
+    "claude-code-acp": [
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-5",
+        "claude-haiku-4-5",
+    ],
+    "claude-cli": [
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-5",
+        "claude-haiku-4-5",
+    ],
     "copilot": [
         "gpt-5.4",
         "gpt-5.4-mini",
@@ -701,6 +714,8 @@ CANONICAL_PROVIDERS: list[ProviderEntry] = [
     ProviderEntry("qwen-oauth",     "Qwen OAuth (Portal)",      "Qwen OAuth (reuses local Qwen CLI login)"),
     ProviderEntry("copilot",        "GitHub Copilot",           "GitHub Copilot (uses GITHUB_TOKEN or gh auth token)"),
     ProviderEntry("copilot-acp",    "GitHub Copilot ACP",       "GitHub Copilot ACP (spawns `copilot --acp --stdio`)"),
+    ProviderEntry("claude-code-acp", "Claude Code ACP",         "Claude Code ACP (spawns `claude --acp --stdio` via Claude Max/subscription)"),
+    ProviderEntry("claude-cli",      "Claude CLI",              "Claude CLI subprocess backend (spawns `claude -p` via Claude Max/subscription)"),
     ProviderEntry("huggingface",    "Hugging Face",             "Hugging Face Inference Providers (20+ open models)"),
     ProviderEntry("gemini",         "Google AI Studio",         "Google AI Studio (Gemini models — native Gemini API)"),
     ProviderEntry("google-gemini-cli", "Google Gemini (OAuth)",   "Google Gemini via OAuth + Code Assist (free tier supported; no API key needed)"),

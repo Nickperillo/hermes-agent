@@ -71,6 +71,7 @@ DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 DEFAULT_QWEN_BASE_URL = "https://portal.qwen.ai/v1"
 DEFAULT_GITHUB_MODELS_BASE_URL = "https://api.githubcopilot.com"
 DEFAULT_COPILOT_ACP_BASE_URL = "acp://copilot"
+DEFAULT_CLAUDE_CLI_BASE_URL = "claude-cli://local"
 DEFAULT_OLLAMA_CLOUD_BASE_URL = "https://ollama.com/v1"
 STEPFUN_STEP_PLAN_INTL_BASE_URL = "https://api.stepfun.ai/step_plan/v1"
 STEPFUN_STEP_PLAN_CN_BASE_URL = "https://api.stepfun.com/step_plan/v1"
@@ -149,6 +150,20 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         auth_type="external_process",
         inference_base_url=DEFAULT_COPILOT_ACP_BASE_URL,
         base_url_env_var="COPILOT_ACP_BASE_URL",
+    ),
+    "claude-code-acp": ProviderConfig(
+        id="claude-code-acp",
+        name="Claude Code ACP",
+        auth_type="external_process",
+        inference_base_url="acp://claude-code",
+        base_url_env_var="CLAUDE_CODE_ACP_BASE_URL",
+    ),
+    "claude-cli": ProviderConfig(
+        id="claude-cli",
+        name="Claude CLI",
+        auth_type="external_process",
+        inference_base_url=DEFAULT_CLAUDE_CLI_BASE_URL,
+        base_url_env_var="CLAUDE_CLI_BASE_URL",
     ),
     "gemini": ProviderConfig(
         id="gemini",
@@ -326,6 +341,82 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
     ),
 }
 
+_EXTERNAL_PROCESS_PROVIDER_META: Dict[str, Dict[str, Any]] = {
+    "copilot-acp": {
+        "command_env": "HERMES_COPILOT_ACP_COMMAND",
+        "fallback_command_env": "COPILOT_CLI_PATH",
+        "args_env": "HERMES_COPILOT_ACP_ARGS",
+        "default_command": "copilot",
+        "default_args": ["--acp", "--stdio"],
+        "api_key": "***",
+        "missing_command_error": (
+            "Could not find the Copilot CLI command '{command}'. "
+            "Install GitHub Copilot CLI or set HERMES_COPILOT_ACP_COMMAND/COPILOT_CLI_PATH."
+        ),
+        "missing_command_code": "missing_copilot_cli",
+    },
+    "claude-code-acp": {
+        "command_env": "HERMES_CLAUDE_ACP_COMMAND",
+        "fallback_command_env": "CLAUDE_CODE_CLI_PATH",
+        "args_env": "HERMES_CLAUDE_ACP_ARGS",
+        "default_command": "claude",
+        "default_args": ["--acp", "--stdio"],
+        "api_key": "***",
+        "missing_command_error": (
+            "Could not find the Claude CLI command '{command}'. "
+            "Install Claude Code CLI or set HERMES_CLAUDE_ACP_COMMAND/CLAUDE_CODE_CLI_PATH."
+        ),
+        "missing_command_code": "missing_claude_cli",
+    },
+    "claude-cli": {
+        "command_env": "HERMES_CLAUDE_CLI_COMMAND",
+        "fallback_command_env": "CLAUDE_CODE_CLI_PATH",
+        "args_env": "HERMES_CLAUDE_CLI_ARGS",
+        "default_command": "claude",
+        "default_args": [
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--include-partial-messages",
+            "--verbose",
+            "--setting-sources",
+            "user",
+            "--permission-mode",
+            "bypassPermissions",
+        ],
+        "api_key": "***",
+        "missing_command_error": (
+            "Could not find the Claude CLI command '{command}'. "
+            "Install Claude Code CLI or set HERMES_CLAUDE_CLI_COMMAND/CLAUDE_CODE_CLI_PATH."
+        ),
+        "missing_command_code": "missing_claude_cli",
+    },
+}
+
+
+def _external_process_provider_meta(provider_id: str) -> Dict[str, Any]:
+    return dict(_EXTERNAL_PROCESS_PROVIDER_META.get(provider_id, {}))
+
+
+def _resolve_external_process_command(provider_id: str) -> tuple[str, list[str], str]:
+    meta = _external_process_provider_meta(provider_id)
+    command_env = str(meta.get("command_env") or "").strip()
+    fallback_command_env = str(meta.get("fallback_command_env") or "").strip()
+    args_env = str(meta.get("args_env") or "").strip()
+    default_command = str(meta.get("default_command") or "").strip()
+    default_args = list(meta.get("default_args") or ["--acp", "--stdio"])
+
+    command = ""
+    if command_env:
+        command = os.getenv(command_env, "").strip()
+    if not command and fallback_command_env:
+        command = os.getenv(fallback_command_env, "").strip()
+    if not command:
+        command = default_command
+
+    raw_args = os.getenv(args_env, "").strip() if args_env else ""
+    args = shlex.split(raw_args) if raw_args else default_args
+    return command, args, args_env
 
 # =============================================================================
 # Anthropic Key Helper

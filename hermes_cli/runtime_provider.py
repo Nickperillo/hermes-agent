@@ -174,6 +174,9 @@ def _resolve_runtime_from_pool_entry(
     elif provider == "google-gemini-cli":
         api_mode = "chat_completions"
         base_url = base_url or "cloudcode-pa://google"
+    elif provider == "claude-cli":
+        api_mode = "chat_completions"
+        base_url = base_url or "claude-cli://local"
     elif provider == "anthropic":
         api_mode = "anthropic_messages"
         cfg_provider = str(model_cfg.get("provider") or "").strip().lower()
@@ -855,10 +858,10 @@ def resolve_runtime_provider(
             logger.info("Google Gemini OAuth credentials failed; "
                         "falling through to next provider.")
 
-    if provider == "copilot-acp":
+    if provider in {"copilot-acp", "claude-code-acp", "claude-cli"}:
         creds = resolve_external_process_provider_credentials(provider)
         return {
-            "provider": "copilot-acp",
+            "provider": provider,
             "api_mode": "chat_completions",
             "base_url": creds.get("base_url", "").rstrip("/"),
             "api_key": creds.get("api_key", ""),

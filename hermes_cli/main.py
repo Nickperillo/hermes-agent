@@ -1560,6 +1560,8 @@ def select_provider_and_model(args=None):
         _model_flow_google_gemini_cli(config, current_model)
     elif selected_provider == "copilot-acp":
         _model_flow_copilot_acp(config, current_model)
+    elif selected_provider == "claude-cli":
+        _model_flow_claude_cli(config, current_model)
     elif selected_provider == "copilot":
         _model_flow_copilot(config, current_model)
     elif selected_provider == "custom":
@@ -3884,6 +3886,71 @@ def _model_flow_bedrock(config, current_model=""):
     else:
         print("  No change.")
 
+
+
+def _model_flow_claude_cli(config, current_model=""):
+    """Claude CLI subprocess flow using `claude -p`."""
+    from hermes_cli.auth import (
+        PROVIDER_REGISTRY,
+        _prompt_model_selection,
+        _save_model_choice,
+        deactivate_provider,
+        get_external_process_provider_status,
+        resolve_external_process_provider_credentials,
+    )
+    from hermes_cli.config import load_config, save_config
+
+    del config
+
+    provider_id = "claude-cli"
+    pconfig = PROVIDER_REGISTRY[provider_id]
+
+    status = get_external_process_provider_status(provider_id)
+    resolved_command = status.get("resolved_command") or status.get("command") or "claude"
+    effective_base = status.get("base_url") or pconfig.inference_base_url
+
+    print("  Claude CLI delegates Hermes turns to `claude -p`.")
+    print("  Hermes shells out to a fresh Claude CLI subprocess for each request.")
+    print("  Hermes currently treats the Claude CLI run as the assistant response backend.")
+    print(f"  Command: {resolved_command}")
+    print(f"  Backend marker: {effective_base}")
+    print()
+
+    try:
+        creds = resolve_external_process_provider_credentials(provider_id)
+    except Exception as exc:
+        print(f"  ⚠ {exc}")
+        print("  Set HERMES_CLAUDE_CLI_COMMAND or CLAUDE_CODE_CLI_PATH if Claude CLI is installed elsewhere.")
+        return
+
+    effective_base = creds.get("base_url") or effective_base
+
+    model_list = [
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-5",
+        "claude-haiku-4-5",
+    ]
+    selected = _prompt_model_selection(model_list, current_model=current_model or model_list[0])
+    if not selected:
+        print("No change.")
+        return
+
+    _save_model_choice(selected)
+
+    cfg = load_config()
+    model = cfg.get("model")
+    if not isinstance(model, dict):
+        model = {"default": model} if model else {}
+        cfg["model"] = model
+    model["provider"] = provider_id
+    model["base_url"] = effective_base
+    model["api_mode"] = "chat_completions"
+    save_config(cfg)
+    deactivate_provider()
+
+    print(f"Default model set to: {selected} (via {pconfig.name})")
 
 def _model_flow_api_key_provider(config, provider_id, current_model=""):
     """Generic flow for API-key providers (z.ai, MiniMax, OpenCode, etc.)."""
@@ -6782,6 +6849,7 @@ For more help on a command:
             "nous",
             "openai-codex",
             "copilot-acp",
+            "claude-cli",
             "copilot",
             "anthropic",
             "gemini",
@@ -8162,6 +8230,18 @@ Examples:
     )
     _add_accept_hooks_flag(mcp_serve_p)
 
+    mcp_serve_tools_p = mcp_sub.add_parser(
+        "serve-tools",
+        help="Run Hermes self-improvement tools as an MCP server (memory, skills, session_search, todo)",
+    )
+    mcp_serve_tools_p.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging on stderr",
+    )
+    _add_accept_hooks_flag(mcp_serve_tools_p)
+
     mcp_add_p = mcp_sub.add_parser(
         "add", help="Add an MCP server (discovery-first install)"
     )
@@ -8893,7 +8973,7 @@ Examples:
     _AGENT_SUBCOMMANDS = {
         "cron":    ("cron_command",    {"run", "tick"}),
         "gateway": ("gateway_command", {"run"}),
-        "mcp":     ("mcp_action",      {"serve"}),
+        "mcp":     ("mcp_action",      {"serve", "serve-tools"}),
     }
     _sub_attr, _sub_set = _AGENT_SUBCOMMANDS.get(args.command, (None, None))
     if (
