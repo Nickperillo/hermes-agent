@@ -2705,6 +2705,7 @@ class TelegramAdapter(BasePlatformAdapter):
             except Exception as e:
                 logger.warning("[Telegram] Failed to cache audio: %s", e, exc_info=True)
 
+        # Download video files to cache for agent processing
         elif msg.video:
             try:
                 file_obj = await msg.video.get_file()

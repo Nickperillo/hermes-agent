@@ -1045,8 +1045,8 @@ class AIAgent:
         if (
             api_mode is None
             and self.api_mode == "chat_completions"
-            and self.provider != "copilot-acp"
-            and not str(self.base_url or "").lower().startswith("acp://copilot")
+            and self.provider not in {"copilot-acp", "claude-code-acp", "claude-cli"}
+            and not str(self.base_url or "").lower().startswith("acp://")
             and not str(self.base_url or "").lower().startswith("acp+tcp://")
             and not self._is_azure_openai_url()
             and (
@@ -1348,6 +1348,9 @@ class AIAgent:
                     client_kwargs["timeout"] = _provider_timeout
                 if self.provider == "copilot-acp":
                     client_kwargs["command"] = self.acp_command
+                    client_kwargs["args"] = self.acp_args
+                elif self.provider == "claude-cli" or str(base_url).startswith("claude-cli://"):
+                    client_kwargs["command"] = self.acp_command or "claude"
                     client_kwargs["args"] = self.acp_args
                 effective_base = base_url
                 if base_url_host_matches(effective_base, "openrouter.ai"):
@@ -5023,6 +5026,98 @@ class AIAgent:
         except Exception:
             return None
 
+    def _build_claude_cli_mcp_config(self) -> Optional[str]:
+        """Build a temporary MCP config JSON file for the Claude CLI backend.
+
+        Includes the built-in hermes-tools server (memory, skills, session_search,
+        todo) plus any user-configured MCP servers from config.yaml.  Returns the
+        path to the temp file, or None if creation fails.
+
+        The temp file is intentionally NOT auto-deleted — it must survive for the
+        lifetime of the Claude CLI subprocess.  A new file is created per client
+        instantiation so concurrent sessions don't collide.
+        """
+        try:
+            from hermes_cli.mcp_config import _get_mcp_servers
+        except Exception:
+            _get_mcp_servers = lambda: {}  # noqa: E731
+
+        mcp_servers: dict = {}
+
+        # ── Built-in hermes-tools MCP server ─────────────────────────
+        repo_root = str(Path(__file__).parent.resolve())
+        mcp_tools_script = os.path.join(repo_root, "mcp_tools_serve.py")
+        if os.path.isfile(mcp_tools_script):
+            hermes_tools_env: dict = {}
+            # Ensure the subprocess can import Hermes modules
+            hermes_tools_env["PYTHONPATH"] = repo_root
+            # Pass through HERMES_HOME so tools find memories/state.db
+            _hh = os.environ.get("HERMES_HOME", "")
+            if _hh:
+                hermes_tools_env["HERMES_HOME"] = _hh
+
+            mcp_servers["hermes-tools"] = {
+                "command": sys.executable,
+                "args": [mcp_tools_script],
+                "env": hermes_tools_env,
+            }
+
+        # ── User-configured MCP servers from config.yaml ─────────────
+        try:
+            user_servers = _get_mcp_servers() or {}
+            for name, cfg in user_servers.items():
+                if not isinstance(cfg, dict):
+                    continue
+                # Skip disabled servers
+                enabled = cfg.get("enabled", True)
+                if isinstance(enabled, str):
+                    enabled = enabled.lower() in ("true", "1", "yes")
+                if not enabled:
+                    continue
+
+                entry: dict = {}
+                if "command" in cfg:
+                    entry["command"] = cfg["command"]
+                    if "args" in cfg:
+                        entry["args"] = list(cfg["args"]) if isinstance(cfg["args"], list) else [str(cfg["args"])]
+                    if "env" in cfg and isinstance(cfg["env"], dict):
+                        entry["env"] = dict(cfg["env"])
+                elif "url" in cfg:
+                    # Claude CLI MCP config supports HTTP/SSE servers via url
+                    entry["url"] = cfg["url"]
+                    if "headers" in cfg and isinstance(cfg["headers"], dict):
+                        # Resolve ${ENV_VAR} references in header values
+                        import re as _re
+                        resolved_headers = {}
+                        for hk, hv in cfg["headers"].items():
+                            if isinstance(hv, str):
+                                resolved_headers[hk] = _re.sub(
+                                    r"\$\{(\w+)\}", lambda m: os.getenv(m.group(1), ""), hv
+                                )
+                            else:
+                                resolved_headers[hk] = hv
+                        entry["headers"] = resolved_headers
+                else:
+                    continue  # No transport — skip
+
+                mcp_servers[name] = entry
+        except Exception as exc:
+            logger.warning("Failed to load user MCP servers for Claude CLI config: %s", exc)
+
+        if not mcp_servers:
+            return None
+
+        config_data = {"mcpServers": mcp_servers}
+        try:
+            fd, path = tempfile.mkstemp(prefix="hermes_mcp_", suffix=".json")
+            with os.fdopen(fd, "w") as f:
+                json.dump(config_data, f, indent=2)
+            logger.info("Claude CLI MCP config written to %s with servers: %s", path, list(mcp_servers.keys()))
+            return path
+        except Exception as exc:
+            logger.warning("Failed to write Claude CLI MCP config: %s", exc)
+            return None
+
     def _create_openai_client(self, client_kwargs: dict, *, reason: str, shared: bool) -> Any:
         from agent.auxiliary_client import _validate_base_url, _validate_proxy_env_urls
         # Treat client_kwargs as read-only. Callers pass self._client_kwargs (or shallow
@@ -5044,6 +5139,28 @@ class AIAgent:
                 "Copilot ACP client created (%s, shared=%s) %s",
                 reason,
                 shared,
+                self._client_log_context(),
+            )
+            return client
+        if self.provider == "claude-cli" or str(client_kwargs.get("base_url", "")).startswith("claude-cli://"):
+            from agent.claude_cli_client import ClaudeCliClient
+
+            safe_kwargs = {
+                k: v for k, v in client_kwargs.items()
+                if k in {"api_key", "base_url", "command", "args", "timeout", "default_headers"}
+            }
+            # Generate MCP config so Claude CLI can call Hermes tools + user MCP servers
+            mcp_config_path = self._build_claude_cli_mcp_config()
+            if mcp_config_path:
+                safe_kwargs["mcp_config_path"] = mcp_config_path
+            client = ClaudeCliClient(**safe_kwargs)
+            if self.tool_progress_callback:
+                client.on_tool_event = self.tool_progress_callback
+            logger.info(
+                "Claude CLI subprocess client created (%s, shared=%s, mcp_config=%s) %s",
+                reason,
+                shared,
+                mcp_config_path or "none",
                 self._client_log_context(),
             )
             return client
@@ -5338,6 +5455,8 @@ class AIAgent:
         primary_client = self._ensure_primary_openai_client(reason=reason)
         if isinstance(primary_client, Mock):
             return primary_client
+        if self.provider == "claude-cli" or str(getattr(primary_client, "base_url", "")).startswith("claude-cli://"):
+            return primary_client
         with self._openai_client_lock():
             request_kwargs = dict(self._client_kwargs)
         if (
@@ -5348,6 +5467,8 @@ class AIAgent:
         return self._create_openai_client(request_kwargs, reason=reason, shared=False)
 
     def _close_request_openai_client(self, client: Any, *, reason: str) -> None:
+        if client is getattr(self, "client", None):
+            return
         self._close_openai_client(client, reason=reason, shared=False)
 
     def _run_codex_stream(self, api_kwargs: dict, client: Any = None, on_first_delta: callable = None):
