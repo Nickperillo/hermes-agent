@@ -15,6 +15,8 @@ from hermes_cli.auth import (
     get_auth_status,
     AuthError,
     KIMI_CODE_BASE_URL,
+    STEPFUN_STEP_PLAN_INTL_BASE_URL,
+    STEPFUN_STEP_PLAN_CN_BASE_URL,
     _resolve_kimi_base_url,
 )
 from hermes_cli.copilot_auth import _try_gh_cli_token
@@ -36,6 +38,7 @@ class TestProviderRegistry:
         ("xai", "xAI", "api_key"),
         ("nvidia", "NVIDIA NIM", "api_key"),
         ("kimi-coding", "Kimi / Moonshot", "api_key"),
+        ("stepfun", "StepFun Step Plan", "api_key"),
         ("minimax", "MiniMax", "api_key"),
         ("minimax-cn", "MiniMax (China)", "api_key"),
         ("ai-gateway", "Vercel AI Gateway", "api_key"),
@@ -84,6 +87,11 @@ class TestProviderRegistry:
         assert pconfig.api_key_env_vars == ("MINIMAX_API_KEY",)
         assert pconfig.base_url_env_var == "MINIMAX_BASE_URL"
 
+    def test_stepfun_env_vars(self):
+        pconfig = PROVIDER_REGISTRY["stepfun"]
+        assert pconfig.api_key_env_vars == ("STEPFUN_API_KEY",)
+        assert pconfig.base_url_env_var == "STEPFUN_BASE_URL"
+
     def test_minimax_cn_env_vars(self):
         pconfig = PROVIDER_REGISTRY["minimax-cn"]
         assert pconfig.api_key_env_vars == ("MINIMAX_CN_API_KEY",)
@@ -110,6 +118,7 @@ class TestProviderRegistry:
         assert PROVIDER_REGISTRY["claude-code-acp"].inference_base_url == "acp://claude-code"
         assert PROVIDER_REGISTRY["zai"].inference_base_url == "https://api.z.ai/api/paas/v4"
         assert PROVIDER_REGISTRY["kimi-coding"].inference_base_url == "https://api.moonshot.ai/v1"
+        assert PROVIDER_REGISTRY["stepfun"].inference_base_url == STEPFUN_STEP_PLAN_INTL_BASE_URL
         assert PROVIDER_REGISTRY["minimax"].inference_base_url == "https://api.minimax.io/anthropic"
         assert PROVIDER_REGISTRY["minimax-cn"].inference_base_url == "https://api.minimaxi.com/anthropic"
         assert PROVIDER_REGISTRY["ai-gateway"].inference_base_url == "https://ai-gateway.vercel.sh/v1"
@@ -132,7 +141,8 @@ PROVIDER_ENV_VARS = (
     "OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",
     "GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY",
-    "KIMI_API_KEY", "KIMI_BASE_URL", "MINIMAX_API_KEY", "MINIMAX_CN_API_KEY",
+    "KIMI_API_KEY", "KIMI_BASE_URL", "STEPFUN_API_KEY", "STEPFUN_BASE_URL",
+    "MINIMAX_API_KEY", "MINIMAX_CN_API_KEY",
     "AI_GATEWAY_API_KEY", "AI_GATEWAY_BASE_URL",
     "KILOCODE_API_KEY", "KILOCODE_BASE_URL",
     "DASHSCOPE_API_KEY", "OPENCODE_ZEN_API_KEY", "OPENCODE_GO_API_KEY",
@@ -160,6 +170,9 @@ class TestResolveProvider:
     def test_explicit_kimi_coding(self):
         assert resolve_provider("kimi-coding") == "kimi-coding"
 
+    def test_explicit_stepfun(self):
+        assert resolve_provider("stepfun") == "stepfun"
+
     def test_explicit_minimax(self):
         assert resolve_provider("minimax") == "minimax"
 
@@ -183,6 +196,9 @@ class TestResolveProvider:
 
     def test_alias_moonshot(self):
         assert resolve_provider("moonshot") == "kimi-coding"
+
+    def test_alias_step(self):
+        assert resolve_provider("step") == "stepfun"
 
     def test_alias_minimax_underscore(self):
         assert resolve_provider("minimax_cn") == "minimax-cn"
@@ -252,6 +268,10 @@ class TestResolveProvider:
         monkeypatch.setenv("KIMI_API_KEY", "test-kimi-key")
         assert resolve_provider("auto") == "kimi-coding"
 
+    def test_auto_detects_stepfun_key(self, monkeypatch):
+        monkeypatch.setenv("STEPFUN_API_KEY", "test-stepfun-key")
+        assert resolve_provider("auto") == "stepfun"
+
     def test_auto_detects_minimax_key(self, monkeypatch):
         monkeypatch.setenv("MINIMAX_API_KEY", "test-mm-key")
         assert resolve_provider("auto") == "minimax"
@@ -315,6 +335,13 @@ class TestApiKeyProviderStatus:
         monkeypatch.setenv("KIMI_BASE_URL", "https://custom.kimi.example/v1")
         status = get_api_key_provider_status("kimi-coding")
         assert status["base_url"] == "https://custom.kimi.example/v1"
+
+    def test_stepfun_status_uses_configured_base_url(self, monkeypatch):
+        monkeypatch.setenv("STEPFUN_API_KEY", "stepfun-key")
+        monkeypatch.setenv("STEPFUN_BASE_URL", STEPFUN_STEP_PLAN_CN_BASE_URL)
+        status = get_api_key_provider_status("stepfun")
+        assert status["configured"] is True
+        assert status["base_url"] == STEPFUN_STEP_PLAN_CN_BASE_URL
 
     def test_copilot_status_uses_gh_cli_token(self, monkeypatch):
         monkeypatch.setattr("hermes_cli.copilot_auth._try_gh_cli_token", lambda: "gho_gh_cli_token")
@@ -459,6 +486,19 @@ class TestResolveApiKeyProviderCredentials:
         assert creds["api_key"] == "kimi-secret-key"
         assert creds["base_url"] == "https://api.moonshot.ai/v1"
 
+    def test_resolve_stepfun_with_key(self, monkeypatch):
+        monkeypatch.setenv("STEPFUN_API_KEY", "stepfun-secret-key")
+        creds = resolve_api_key_provider_credentials("stepfun")
+        assert creds["provider"] == "stepfun"
+        assert creds["api_key"] == "stepfun-secret-key"
+        assert creds["base_url"] == STEPFUN_STEP_PLAN_INTL_BASE_URL
+
+    def test_resolve_stepfun_custom_base_url(self, monkeypatch):
+        monkeypatch.setenv("STEPFUN_API_KEY", "stepfun-secret-key")
+        monkeypatch.setenv("STEPFUN_BASE_URL", STEPFUN_STEP_PLAN_CN_BASE_URL)
+        creds = resolve_api_key_provider_credentials("stepfun")
+        assert creds["base_url"] == STEPFUN_STEP_PLAN_CN_BASE_URL
+
     def test_resolve_minimax_with_key(self, monkeypatch):
         monkeypatch.setenv("MINIMAX_API_KEY", "mm-secret-key")
         creds = resolve_api_key_provider_credentials("minimax")
@@ -561,6 +601,16 @@ class TestRuntimeProviderResolution:
         assert result["base_url"] == "acp://claude-code"
         assert result["command"] == "/usr/local/bin/claude"
         assert result["args"] == ["--acp", "--stdio"]
+
+    def test_runtime_stepfun(self, monkeypatch):
+        monkeypatch.setenv("STEPFUN_API_KEY", "stepfun-key")
+        monkeypatch.setenv("STEPFUN_BASE_URL", STEPFUN_STEP_PLAN_CN_BASE_URL)
+        from hermes_cli.runtime_provider import resolve_runtime_provider
+        result = resolve_runtime_provider(requested="stepfun")
+        assert result["provider"] == "stepfun"
+        assert result["api_mode"] == "chat_completions"
+        assert result["api_key"] == "stepfun-key"
+        assert result["base_url"] == STEPFUN_STEP_PLAN_CN_BASE_URL
 
     def test_runtime_minimax(self, monkeypatch):
         monkeypatch.setenv("MINIMAX_API_KEY", "mm-key")

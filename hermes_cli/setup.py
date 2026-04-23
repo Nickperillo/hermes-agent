@@ -102,6 +102,7 @@ _DEFAULT_PROVIDER_MODELS = {
     "zai": ["glm-5.1", "glm-5", "glm-4.7", "glm-4.5", "glm-4.5-flash"],
     "kimi-coding": ["kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking", "kimi-k2-turbo-preview"],
     "kimi-coding-cn": ["kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking", "kimi-k2-turbo-preview"],
+    "stepfun": ["step-3.5-flash", "step-3.5-flash-2603"],
     "arcee": ["trinity-large-thinking", "trinity-large-preview", "trinity-mini"],
     "minimax": ["MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M2.1", "MiniMax-M2"],
     "minimax-cn": ["MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M2.1", "MiniMax-M2"],
@@ -414,13 +415,36 @@ def _print_setup_summary(config: dict, hermes_home):
             ("Browser Automation", False, missing_browser_hint)
         )
 
-    # FAL (image generation)
+    # Image generation — FAL (direct or via Nous), or any plugin-registered
+    # provider (OpenAI, etc.)
     if subscription_features.image_gen.managed_by_nous:
         tool_status.append(("Image Generation (Nous subscription)", True, None))
     elif subscription_features.image_gen.available:
         tool_status.append(("Image Generation", True, None))
     else:
-        tool_status.append(("Image Generation", False, "FAL_KEY"))
+        # Fall back to probing plugin-registered providers so OpenAI-only
+        # setups don't show as "missing FAL_KEY".
+        _img_backend = None
+        try:
+            from agent.image_gen_registry import list_providers
+            from hermes_cli.plugins import _ensure_plugins_discovered
+
+            _ensure_plugins_discovered()
+            for _p in list_providers():
+                if _p.name == "fal":
+                    continue
+                try:
+                    if _p.is_available():
+                        _img_backend = _p.display_name
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        if _img_backend:
+            tool_status.append((f"Image Generation ({_img_backend})", True, None))
+        else:
+            tool_status.append(("Image Generation", False, "FAL_KEY or OPENAI_API_KEY"))
 
     # TTS — show configured provider
     tts_provider = config.get("tts", {}).get("provider", "edge")
@@ -788,6 +812,7 @@ def setup_model_provider(config: dict, *, quick: bool = False):
             "zai": "Z.AI / GLM",
             "kimi-coding": "Kimi / Moonshot",
             "kimi-coding-cn": "Kimi / Moonshot (China)",
+            "stepfun": "StepFun Step Plan",
             "minimax": "MiniMax",
             "minimax-cn": "MiniMax CN",
             "anthropic": "Anthropic",
@@ -2316,6 +2341,7 @@ def setup_gateway(config: dict):
             launchd_install,
             launchd_start,
             launchd_restart,
+            UserSystemdUnavailableError,
         )
 
         service_installed = _is_service_installed()
@@ -2339,6 +2365,10 @@ def setup_gateway(config: dict):
                         systemd_restart()
                     elif _is_macos:
                         launchd_restart()
+                except UserSystemdUnavailableError as e:
+                    print_error("  Restart failed — user systemd not reachable:")
+                    for line in str(e).splitlines():
+                        print(f"  {line}")
                 except Exception as e:
                     print_error(f"  Restart failed: {e}")
         elif service_installed:
@@ -2348,6 +2378,10 @@ def setup_gateway(config: dict):
                         systemd_start()
                     elif _is_macos:
                         launchd_start()
+                except UserSystemdUnavailableError as e:
+                    print_error("  Start failed — user systemd not reachable:")
+                    for line in str(e).splitlines():
+                        print(f"  {line}")
                 except Exception as e:
                     print_error(f"  Start failed: {e}")
         elif supports_service_manager:
@@ -2371,6 +2405,10 @@ def setup_gateway(config: dict):
                                 systemd_start(system=installed_scope == "system")
                             elif _is_macos:
                                 launchd_start()
+                        except UserSystemdUnavailableError as e:
+                            print_error("  Start failed — user systemd not reachable:")
+                            for line in str(e).splitlines():
+                                print(f"  {line}")
                         except Exception as e:
                             print_error(f"  Start failed: {e}")
                 except Exception as e:
