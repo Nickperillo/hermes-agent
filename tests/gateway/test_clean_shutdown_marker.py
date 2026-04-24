@@ -4,7 +4,10 @@ When the gateway shuts down gracefully (hermes update, gateway restart, /restart
 it writes a .clean_shutdown marker.  On the next startup, if the marker exists,
 suspend_recently_active() is skipped so users don't lose their sessions.
 
-After a crash (no marker), suspension still fires as a safety net for stuck sessions.
+After a crash (no marker), suspend_recently_active() marks sessions as
+resume_pending (not suspended) so they auto-continue from the existing
+transcript.  The stuck-loop escalation (3 consecutive restarts) is the
+safety net that escalates to a full suspended wipe.
 """
 
 import os
@@ -40,18 +43,22 @@ def _make_store(tmp_path, policy=None):
 class TestSuspendRecentlyActive:
     """Verify suspend_recently_active only marks recent sessions."""
 
-    def test_suspends_recently_active_sessions(self, tmp_path):
+    def test_marks_recently_active_sessions_for_resume(self, tmp_path):
         store = _make_store(tmp_path)
         source = _make_source()
         entry = store.get_or_create_session(source)
         assert not entry.suspended
+        assert not entry.resume_pending
 
         count = store.suspend_recently_active()
         assert count == 1
 
-        # Re-fetch — should be suspended now
+        # Re-fetch — should be resume_pending (preserves session_id)
         refreshed = store.get_or_create_session(source)
-        assert refreshed.was_auto_reset
+        assert refreshed.session_id == entry.session_id
+        assert refreshed.resume_pending is True
+        assert refreshed.resume_reason == "crash_recovery"
+        assert not refreshed.was_auto_reset
 
     def test_does_not_suspend_old_sessions(self, tmp_path):
         store = _make_store(tmp_path)
@@ -66,21 +73,18 @@ class TestSuspendRecentlyActive:
         count = store.suspend_recently_active(max_age_seconds=120)
         assert count == 0
 
-    def test_already_suspended_not_double_counted(self, tmp_path):
+    def test_already_resume_pending_not_double_counted(self, tmp_path):
         store = _make_store(tmp_path)
         source = _make_source()
         entry = store.get_or_create_session(source)
 
-        # Suspend once
+        # Mark for resume once
         count1 = store.suspend_recently_active()
         assert count1 == 1
 
-        # Create a new session (the old one got reset on next access)
-        entry2 = store.get_or_create_session(source)
-
-        # Suspend again — the new session is recent but not yet suspended
+        # Call again — already resume_pending, should be skipped
         count2 = store.suspend_recently_active()
-        assert count2 == 1
+        assert count2 == 0
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +165,8 @@ class TestCleanShutdownMarker:
 
         assert not marker.exists(), "Marker should be cleaned up"
 
-    def test_no_marker_triggers_suspension(self, tmp_path, monkeypatch):
-        """Without .clean_shutdown marker (crash), suspension should fire."""
+    def test_no_marker_triggers_resume_pending(self, tmp_path, monkeypatch):
+        """Without .clean_shutdown marker (crash), resume_pending should fire."""
         monkeypatch.setattr("gateway.run._hermes_home", tmp_path)
 
         marker = tmp_path / ".clean_shutdown"
@@ -173,6 +177,7 @@ class TestCleanShutdownMarker:
         source = _make_source()
         entry = store.get_or_create_session(source)
         assert not entry.suspended
+        assert not entry.resume_pending
 
         # Simulate what start() does:
         if marker.exists():
@@ -180,11 +185,13 @@ class TestCleanShutdownMarker:
         else:
             store.suspend_recently_active()
 
-        # Session SHOULD be suspended (crash recovery)
+        # Session should be resume_pending (not suspended) after crash
         with store._lock:
             store._ensure_loaded_locked()
+            resume_count = sum(1 for e in store._entries.values() if e.resume_pending)
             suspended_count = sum(1 for e in store._entries.values() if e.suspended)
-        assert suspended_count == 1, "Session should be suspended after crash (no marker)"
+        assert resume_count == 1, "Session should be resume_pending after crash (no marker)"
+        assert suspended_count == 0, "Session should NOT be suspended — crash recovery uses resume"
 
     def test_marker_written_on_restart_stop(self, tmp_path, monkeypatch):
         """stop(restart=True) should also write the marker."""

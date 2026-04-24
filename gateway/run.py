@@ -2424,15 +2424,13 @@ class GatewayRunner:
         except Exception as e:
             logger.warning("Process checkpoint recovery: %s", e)
 
-        # Suspend sessions that were active when the gateway last exited.
-        # This prevents stuck sessions from being blindly resumed on restart,
-        # which can create an unrecoverable loop (#7536).  Suspended sessions
-        # auto-reset on the next incoming message, giving the user a clean start.
+        # Mark recently-active sessions for resumption after a non-graceful
+        # exit (crash / hard kill).  These get a system note on next message
+        # and auto-continue from the existing transcript.  Stuck-loop
+        # escalation (3 consecutive restarts) still escalates to full suspend.
         #
-        # SKIP suspension after a clean (graceful) shutdown — the previous
-        # process already drained active agents, so sessions aren't stuck.
-        # This prevents unwanted auto-resets after `hermes update`,
-        # `hermes gateway restart`, or `/restart`.
+        # SKIP after a clean (graceful) shutdown — the previous process
+        # already drained active agents via the drain-timeout path.
         _clean_marker = _hermes_home / ".clean_shutdown"
         if _clean_marker.exists():
             logger.info("Previous gateway exited cleanly — skipping session suspension")
@@ -2442,9 +2440,9 @@ class GatewayRunner:
                 pass
         else:
             try:
-                suspended = self.session_store.suspend_recently_active()
-                if suspended:
-                    logger.info("Suspended %d in-flight session(s) from previous run", suspended)
+                resumed = self.session_store.suspend_recently_active()
+                if resumed:
+                    logger.info("Marked %d in-flight session(s) for resume after crash recovery", resumed)
             except Exception as e:
                 logger.warning("Session suspension on startup failed: %s", e)
 
@@ -10946,6 +10944,8 @@ class GatewayRunner:
                     if _reason == "restart_timeout"
                     else "a gateway shutdown"
                     if _reason == "shutdown_timeout"
+                    else "an unexpected gateway crash"
+                    if _reason == "crash_recovery"
                     else "a gateway interruption"
                 )
                 message = (

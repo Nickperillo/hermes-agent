@@ -131,6 +131,8 @@ def _simulate_note_injection(
             if reason == "restart_timeout"
             else "a gateway shutdown"
             if reason == "shutdown_timeout"
+            else "an unexpected gateway crash"
+            if reason == "crash_recovery"
             else "a gateway interruption"
         )
         message = (
@@ -363,8 +365,8 @@ class TestGetOrCreateResumePending:
 # ---------------------------------------------------------------------------
 
 
-class TestSuspendRecentlyActiveSkipsResumePending:
-    def test_resume_pending_entries_not_suspended(self, tmp_path):
+class TestSuspendRecentlyActiveResumeBehaviour:
+    def test_already_resume_pending_entries_skipped(self, tmp_path):
         store = _make_store(tmp_path)
         source = _make_source()
         entry = store.get_or_create_session(source)
@@ -376,19 +378,52 @@ class TestSuspendRecentlyActiveSkipsResumePending:
         assert e.suspended is False
         assert e.resume_pending is True
 
-    def test_non_resume_pending_still_suspended(self, tmp_path):
-        """Non-resume sessions still get the old crash-recovery suspension."""
+    def test_crash_recovery_marks_resume_pending_not_suspended(self, tmp_path):
+        """After crash, recently-active sessions are marked resume_pending
+        (not suspended), so they auto-continue from existing transcript."""
+        store = _make_store(tmp_path)
+        source = _make_source(chat_id="a")
+        entry = store.get_or_create_session(source)
+
+        count = store.suspend_recently_active()
+        assert count == 1
+        e = store._entries[entry.session_key]
+        assert e.suspended is False
+        assert e.resume_pending is True
+        assert e.resume_reason == "crash_recovery"
+
+    def test_already_suspended_entries_skipped(self, tmp_path):
+        """Entries already suspended (e.g. by /stop) are not touched."""
+        store = _make_store(tmp_path)
+        source = _make_source()
+        entry = store.get_or_create_session(source)
+        store.suspend_session(entry.session_key)
+
+        count = store.suspend_recently_active()
+        assert count == 0
+        e = store._entries[entry.session_key]
+        assert e.suspended is True
+        assert e.resume_pending is False
+
+    def test_mixed_entries_only_marks_unhandled(self, tmp_path):
+        """Already-resume_pending entries are skipped, new ones get marked."""
         store = _make_store(tmp_path)
         source_a = _make_source(chat_id="a")
         source_b = _make_source(chat_id="b")
         entry_a = store.get_or_create_session(source_a)
         entry_b = store.get_or_create_session(source_b)
-        store.mark_resume_pending(entry_a.session_key)
+        store.mark_resume_pending(entry_b.session_key)
 
         count = store.suspend_recently_active()
         assert count == 1
-        assert store._entries[entry_a.session_key].suspended is False
-        assert store._entries[entry_b.session_key].suspended is True
+        # entry_a should now be resume_pending with crash_recovery reason
+        ea = store._entries[entry_a.session_key]
+        assert ea.resume_pending is True
+        assert ea.resume_reason == "crash_recovery"
+        # entry_b should still have its original reason
+        eb = store._entries[entry_b.session_key]
+        assert eb.resume_pending is True
+        assert eb.resume_reason == "restart_timeout"
 
 
 # ---------------------------------------------------------------------------
@@ -432,6 +467,16 @@ class TestResumePendingSystemNote:
             resume_entry=entry,
         )
         assert "gateway shutdown" in result
+
+    def test_resume_pending_crash_note_mentions_crash(self):
+        entry = self._pending_entry(reason="crash_recovery")
+        result = _simulate_note_injection(
+            agent_history=[{"role": "assistant", "content": "working..."}],
+            user_message="hey",
+            resume_entry=entry,
+        )
+        assert "unexpected gateway crash" in result
+        assert "hey" in result
 
     def test_resume_pending_fires_without_tool_tail(self):
         """Key improvement over PR #9934: the restart-resume note fires
