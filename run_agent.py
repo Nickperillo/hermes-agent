@@ -1346,12 +1346,16 @@ class AIAgent:
                     client_kwargs = {"api_key": api_key, "base_url": base_url}
                 if _provider_timeout is not None:
                     client_kwargs["timeout"] = _provider_timeout
-                if self.provider == "copilot-acp":
-                    client_kwargs["command"] = self.acp_command
-                    client_kwargs["args"] = self.acp_args
+                if self.provider in {"copilot-acp", "claude-code-acp"} or str(base_url).startswith("acp://"):
+                    if self.provider == "claude-code-acp":
+                        client_kwargs["command"] = self.acp_command or "claude"
+                        client_kwargs["args"] = list(self.acp_args or ["--acp", "--stdio"])
+                    else:
+                        client_kwargs["command"] = self.acp_command
+                        client_kwargs["args"] = self.acp_args
                 elif self.provider == "claude-cli" or str(base_url).startswith("claude-cli://"):
                     client_kwargs["command"] = self.acp_command or "claude"
-                    client_kwargs["args"] = self.acp_args
+                    client_kwargs["args"] = list(self.acp_args or [])
                 effective_base = base_url
                 if base_url_host_matches(effective_base, "openrouter.ai"):
                     client_kwargs["default_headers"] = {
@@ -5131,12 +5135,12 @@ class AIAgent:
         client_kwargs = dict(client_kwargs)
         _validate_proxy_env_urls()
         _validate_base_url(client_kwargs.get("base_url"))
-        if self.provider == "copilot-acp" or str(client_kwargs.get("base_url", "")).startswith("acp://copilot"):
+        if self.provider in {"copilot-acp", "claude-code-acp"} or str(client_kwargs.get("base_url", "")).startswith("acp://"):
             from agent.copilot_acp_client import CopilotACPClient
 
             client = CopilotACPClient(**client_kwargs)
             logger.info(
-                "Copilot ACP client created (%s, shared=%s) %s",
+                "ACP subprocess client created (%s, shared=%s) %s",
                 reason,
                 shared,
                 self._client_log_context(),

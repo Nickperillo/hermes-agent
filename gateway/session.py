@@ -1064,19 +1064,21 @@ class SessionStore:
         return len(removed_keys)
 
     def suspend_recently_active(self, max_age_seconds: int = 120) -> int:
-        """Mark recently-active sessions as suspended.
+        """Mark recently-active sessions for resumption instead of suspension.
 
-        Called on gateway startup to prevent sessions that were likely
-        in-flight when the gateway last exited from being blindly resumed
-        (#7536).  Only suspends sessions updated within *max_age_seconds*
-        to avoid resetting long-idle sessions that are harmless to resume.
-        Returns the number of sessions that were suspended.
+        Called on gateway startup after a non-graceful exit (crash / hard
+        kill).  Sessions updated within *max_age_seconds* are flagged
+        ``resume_pending`` so the next user message auto-continues from
+        the existing transcript with an interruption system note, rather
+        than wiping the session.
 
-        Entries flagged ``resume_pending=True`` are skipped — those were
-        marked intentionally by the drain-timeout path as recoverable.
-        Terminal escalation for genuinely stuck ``resume_pending`` sessions
-        is handled by the existing ``.restart_failure_counts`` stuck-loop
-        counter, which runs after this method on startup.
+        Terminal escalation for genuinely stuck sessions is handled by the
+        ``.restart_failure_counts`` stuck-loop counter which runs after
+        this method on startup — 3 consecutive restarts-while-active
+        escalates to a full ``suspended=True`` wipe.
+
+        Entries already flagged ``resume_pending=True`` or
+        ``suspended=True`` are skipped.
         """
         from datetime import timedelta
 
@@ -1085,10 +1087,12 @@ class SessionStore:
         with self._lock:
             self._ensure_loaded_locked()
             for entry in self._entries.values():
-                if entry.resume_pending:
+                if entry.resume_pending or entry.suspended:
                     continue
-                if not entry.suspended and entry.updated_at >= cutoff:
-                    entry.suspended = True
+                if entry.updated_at >= cutoff:
+                    entry.resume_pending = True
+                    entry.resume_reason = "crash_recovery"
+                    entry.last_resume_marked_at = _now()
                     count += 1
             if count:
                 self._save()

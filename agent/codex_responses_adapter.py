@@ -549,10 +549,12 @@ def _preflight_codex_input_items(raw_items: Any) -> List[Dict[str, Any]]:
                 # Multimodal content from ``_chat_messages_to_responses_input``
                 # is already in Responses format (``input_text`` / ``output_text``
                 # / ``input_image``).  Validate each part and pass through.
-                # Use the correct text type for the role — ``output_text`` for
-                # assistant messages, ``input_text`` for user messages.
-                text_type = "output_text" if role == "assistant" else "input_text"
+                # Preserve message-direction semantics here: prior assistant
+                # messages must stay ``output_text`` when replayed back into the
+                # Responses API, otherwise Codex rejects them with:
+                # "Invalid value: 'input_text'. Supported values are: 'output_text' and 'refusal'."
                 validated: List[Dict[str, Any]] = []
+                text_type = "output_text" if role == "assistant" else "input_text"
                 for part_idx, part in enumerate(content):
                     if isinstance(part, str):
                         if part:
