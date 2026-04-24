@@ -1101,6 +1101,20 @@ class TestHuggingFaceModels:
         assert _PROVIDER_LABELS["huggingface"] == "Hugging Face"
 
 class TestClaudeCliExternalProcess:
+    def test_claude_cli_status_detects_default_command(self, monkeypatch):
+        monkeypatch.delenv("HERMES_CLAUDE_CLI_COMMAND", raising=False)
+        monkeypatch.delenv("HERMES_CLAUDE_CLI_ARGS", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_CLI_PATH", raising=False)
+        monkeypatch.setattr("hermes_cli.auth.shutil.which", lambda command: f"/usr/local/bin/{command}" if command == "claude" else None)
+
+        status = get_external_process_provider_status("claude-cli")
+
+        assert status["configured"] is True
+        assert status["command"] == "claude"
+        assert status["resolved_command"] == "/usr/local/bin/claude"
+        assert status["args"][0] == "-p"
+        assert status["base_url"] == "claude-cli://local"
+
     def test_claude_cli_status_detects_command(self, monkeypatch):
         monkeypatch.setenv("HERMES_CLAUDE_CLI_COMMAND", "claude")
         status = get_external_process_provider_status("claude-cli")
@@ -1115,4 +1129,14 @@ class TestClaudeCliExternalProcess:
         assert creds["base_url"] == "claude-cli://local"
         assert creds["command"].endswith("claude")
         assert creds["args"][0] == "-p"
+
+    def test_get_auth_status_dispatches_to_claude_cli(self, monkeypatch):
+        monkeypatch.delenv("HERMES_CLAUDE_CLI_COMMAND", raising=False)
+        monkeypatch.setattr("hermes_cli.auth.shutil.which", lambda command: f"/usr/local/bin/{command}" if command == "claude" else None)
+
+        status = get_auth_status("claude-cli")
+
+        assert status["configured"] is True
+        assert status["provider"] == "claude-cli"
+        assert status["command"] == "claude"
 
