@@ -20,6 +20,7 @@ import shlex
 import subprocess
 import threading
 import uuid
+from distutils.util import strtobool
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Iterable
@@ -67,6 +68,16 @@ def _coerce_timeout_seconds(timeout: Any) -> float:
         except Exception:
             pass
     return _DEFAULT_TIMEOUT_SECONDS
+
+
+def _claude_cli_resume_enabled() -> bool:
+    raw = os.getenv("HERMES_CLAUDE_CLI_RESUME", "true").strip()
+    if not raw:
+        return True
+    try:
+        return bool(strtobool(raw))
+    except Exception:
+        return raw.lower() not in {"false", "0", "no", "off"}
 
 
 def _render_message_content(content: Any) -> str:
@@ -253,10 +264,8 @@ class ClaudeCliClient:
             cmd.extend(["--append-system-prompt", system_prompt])
         if self.mcp_config_path:
             cmd.extend(["--mcp-config", self.mcp_config_path])
-        # MVP: stay stateless at the Hermes layer and let the full transcript be
-        # the source of truth. Claude's returned session_id is still captured for
-        # future evolution/debugging, but we intentionally do not pass --resume
-        # yet because Hermes already re-sends full history each turn.
+        if self._resume_session_id and _claude_cli_resume_enabled():
+            cmd.extend(["--resume", self._resume_session_id])
         return cmd
 
     def _run_claude_stream(

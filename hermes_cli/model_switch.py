@@ -664,6 +664,27 @@ def switch_model(
     # PATH B: No explicit provider — resolve from model input
     # =================================================================
     else:
+        # --- Step 0: provider-prefixed switches on non-aggregator providers ---
+        # Accept inputs like `claude-cli/claude-opus-4-6` as an implicit
+        # provider switch when the CURRENT provider is not an aggregator.
+        # This avoids mis-parsing the prefix as part of an Anthropic model ID
+        # and reproducing the broken state `provider=anthropic`,
+        # `model=claude-cli/claude-opus-4-6`.
+        if not is_aggregator(current_provider) and "/" in raw_input:
+            _left, _right = raw_input.split("/", 1)
+            _prefixed = resolve_provider_full(
+                _left.strip(),
+                user_providers,
+                custom_providers,
+            )
+            if _prefixed is not None and _right.strip():
+                target_provider = _prefixed.id
+                new_model = _right.strip()
+                logger.debug(
+                    "Provider-prefixed switch '%s' resolved to model=%s provider=%s",
+                    raw_input, new_model, target_provider,
+                )
+
         # --- Step a: Try alias resolution on current provider ---
         alias_result = resolve_alias(raw_input, current_provider)
 
@@ -1043,6 +1064,17 @@ def list_authenticated_providers(
                     if any(os.environ.get(ev) for ev in pcfg.api_key_env_vars):
                         has_creds = True
                         break
+        # External-process providers (Claude CLI / ACP backends) usually do not
+        # persist credentials in auth.json. Treat an installed/configured local
+        # command as sufficient for discovery in `/model`.
+        if not has_creds and overlay.auth_type == "external_process":
+            try:
+                from hermes_cli.auth import get_external_process_provider_status
+                status = get_external_process_provider_status(hermes_slug)
+                if status.get("configured"):
+                    has_creds = True
+            except Exception as exc:
+                logger.debug("External-process status check failed for %s: %s", hermes_slug, exc)
         # Check auth store and credential pool for non-env-var credentials.
         # This applies to OAuth providers AND api_key providers that also
         # support OAuth (e.g. anthropic supports both API key and Claude Code
@@ -1144,6 +1176,14 @@ def list_authenticated_providers(
                     _cp.slug in _cp_providers_store
                     or _cp.slug in _cp_pool_store
                 ):
+                    _cp_has_creds = True
+            except Exception:
+                pass
+        if not _cp_has_creds and _cp_config and _cp_config.auth_type == "external_process":
+            try:
+                from hermes_cli.auth import get_external_process_provider_status
+                _status = get_external_process_provider_status(_cp.slug)
+                if _status.get("configured"):
                     _cp_has_creds = True
             except Exception:
                 pass

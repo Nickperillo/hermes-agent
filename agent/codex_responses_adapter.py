@@ -413,12 +413,16 @@ def _preflight_codex_input_items(raw_items: Any) -> List[Dict[str, Any]]:
             if isinstance(content, list):
                 # Multimodal content from ``_chat_messages_to_responses_input``
                 # is already in Responses format (``input_text`` / ``input_image``).
-                # Validate each part and pass through.
+                # Preserve message-direction semantics here: prior assistant
+                # messages must stay ``output_text`` when replayed back into the
+                # Responses API, otherwise Codex rejects them with:
+                # "Invalid value: 'input_text'. Supported values are: 'output_text' and 'refusal'."
                 validated: List[Dict[str, Any]] = []
+                _text_type = "output_text" if role == "assistant" else "input_text"
                 for part_idx, part in enumerate(content):
                     if isinstance(part, str):
                         if part:
-                            validated.append({"type": "input_text", "text": part})
+                            validated.append({"type": _text_type, "text": part})
                         continue
                     if not isinstance(part, dict):
                         raise ValueError(
@@ -429,7 +433,7 @@ def _preflight_codex_input_items(raw_items: Any) -> List[Dict[str, Any]]:
                         text = part.get("text", "")
                         if not isinstance(text, str):
                             text = str(text or "")
-                        validated.append({"type": "input_text", "text": text})
+                        validated.append({"type": _text_type, "text": text})
                     elif ptype in {"input_image", "image_url"}:
                         image_ref = part.get("image_url", "")
                         detail = part.get("detail")

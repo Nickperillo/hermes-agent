@@ -76,3 +76,20 @@ def test_prompt_formatter_keeps_system_prompt_separate():
         )
     assert mock_run.call_args.kwargs["system_prompt"] == "System rule"
     assert "Conversation transcript" in mock_run.call_args.kwargs["prompt"]
+
+
+def test_build_command_uses_resume_session_id(monkeypatch):
+    monkeypatch.delenv("HERMES_CLAUDE_CLI_RESUME", raising=False)
+    client = ClaudeCliClient(command="claude", args=["-p"])
+    client._resume_session_id = "sess-123"
+    cmd = client._build_command(model="claude-opus-4-6", system_prompt="", stream=False)
+    assert "--resume" in cmd
+    assert cmd[cmd.index("--resume") + 1] == "sess-123"
+
+
+def test_build_command_can_disable_resume(monkeypatch):
+    monkeypatch.setenv("HERMES_CLAUDE_CLI_RESUME", "false")
+    client = ClaudeCliClient(command="claude", args=["-p"])
+    client._resume_session_id = "sess-123"
+    cmd = client._build_command(model="claude-opus-4-6", system_prompt="", stream=False)
+    assert "--resume" not in cmd

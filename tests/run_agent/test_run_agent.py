@@ -3838,6 +3838,32 @@ def test_aiagent_uses_claude_code_acp_client():
     assert mock_acp_client.call_args.kwargs["args"] == ["--acp", "--stdio"]
 
 
+def test_aiagent_defaults_claude_code_acp_to_claude_command():
+    with (
+        patch("run_agent.get_tool_definitions", return_value=_make_tool_defs("web_search")),
+        patch("run_agent.check_toolset_requirements", return_value={}),
+        patch("run_agent.OpenAI") as mock_openai,
+        patch("agent.copilot_acp_client.CopilotACPClient") as mock_acp_client,
+    ):
+        acp_client = MagicMock()
+        mock_acp_client.return_value = acp_client
+
+        agent = AIAgent(
+            api_key="claude-code-acp",
+            base_url="acp://claude-code",
+            provider="claude-code-acp",
+            quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=True,
+        )
+
+    assert agent.client is acp_client
+    mock_openai.assert_not_called()
+    mock_acp_client.assert_called_once()
+    assert mock_acp_client.call_args.kwargs["command"] == "claude"
+    assert mock_acp_client.call_args.kwargs["args"] == ["--acp", "--stdio"]
+
+
 def test_acp_client_ignores_non_numeric_timeout_objects():
     from agent.copilot_acp_client import CopilotACPClient
 
