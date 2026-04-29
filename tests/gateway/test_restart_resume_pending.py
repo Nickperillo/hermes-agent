@@ -470,7 +470,9 @@ class TestResumePendingSystemNote:
 
     def test_resume_pending_crash_note_mentions_crash(self):
         entry = self._pending_entry(reason="crash_recovery")
+        history = [{"role": "assistant", "content": "working...", "timestamp": time.time()}]
         result = _simulate_note_injection(
+            history=history,
             agent_history=[{"role": "assistant", "content": "working..."}],
             user_message="hey",
             resume_entry=entry,
